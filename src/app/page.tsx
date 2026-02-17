@@ -1,37 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 
-// Placeholder data - später kommt das aus Supabase
-const DEMO_OBJECTS = [
-  {
-    id: "1",
-    name: "Musterstraße 12",
-    address: "10115 Berlin",
-    units: 8,
-    paid: 6,
-    open: 2,
-    unclear: 0,
-  },
-  {
-    id: "2",
-    name: "Hauptweg 5",
-    address: "10437 Berlin",
-    units: 12,
-    paid: 10,
-    open: 1,
-    unclear: 1,
-  },
-  {
-    id: "3",
-    name: "Gartenallee 22",
-    address: "12047 Berlin",
-    units: 6,
-    paid: 6,
-    open: 0,
-    unclear: 0,
-  },
-];
+interface ObjectData {
+  id: string;
+  name: string;
+  address: string;
+  iban: string | null;
+  bic: string | null;
+  account_holder: string | null;
+}
 
 function StatusBadge({ paid, open, unclear }: { paid: number; open: number; unclear: number }) {
   return (
@@ -56,8 +35,174 @@ function StatusBadge({ paid, open, unclear }: { paid: number; open: number; uncl
   );
 }
 
+function CreateObjectModal({
+  isOpen,
+  onClose,
+  onCreated,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+  const [iban, setIban] = useState("");
+  const [bic, setBic] = useState("");
+  const [accountHolder, setAccountHolder] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  if (!isOpen) return null;
+
+  const handleSave = async () => {
+    if (!name.trim() || !address.trim()) return;
+    setSaving(true);
+
+    const { error } = await supabase.from("objects").insert({
+      name: name.trim(),
+      address: address.trim(),
+      iban: iban.trim() || null,
+      bic: bic.trim() || null,
+      account_holder: accountHolder.trim() || null,
+    });
+
+    if (error) {
+      alert("Fehler beim Speichern: " + error.message);
+    } else {
+      setName("");
+      setAddress("");
+      setIban("");
+      setBic("");
+      setAccountHolder("");
+      onCreated();
+      onClose();
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+        <div className="p-6 border-b border-gray-100">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Neues Objekt anlegen
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Erfassen Sie die Grunddaten Ihres Mietobjekts
+          </p>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Objektname *
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="z.B. Musterstraße 12"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Adresse *
+            </label>
+            <input
+              type="text"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="z.B. 10115 Berlin"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Kontoinhaber
+            </label>
+            <input
+              type="text"
+              value={accountHolder}
+              onChange={(e) => setAccountHolder(e.target.value)}
+              placeholder="z.B. Max Mustermann"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              IBAN
+            </label>
+            <input
+              type="text"
+              value={iban}
+              onChange={(e) => setIban(e.target.value)}
+              placeholder="DE89 3704 0044 0532 0130 00"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              BIC
+            </label>
+            <input
+              type="text"
+              value={bic}
+              onChange={(e) => setBic(e.target.value)}
+              placeholder="COBADEFFXXX"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-gray-100 flex gap-3 justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            Abbrechen
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!name.trim() || !address.trim() || saving}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? "Speichern..." : "Objekt anlegen"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
-  const [objects] = useState(DEMO_OBJECTS);
+  const [objects, setObjects] = useState<ObjectData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+
+  const loadObjects = async () => {
+    const { data, error } = await supabase
+      .from("objects")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Fehler beim Laden:", error);
+    } else {
+      setObjects(data || []);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadObjects();
+  }, []);
+
+  const totalUnits = 0; // TODO: wird später aus Mieterliste berechnet
+  const totalOpen = 0; // TODO: wird später aus Zahlungsliste berechnet
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -72,7 +217,10 @@ export default function Home() {
               Ihre Objekte im Überblick
             </p>
           </div>
-          <button className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
             + Objekt anlegen
           </button>
         </div>
@@ -88,64 +236,88 @@ export default function Home() {
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm text-gray-500">Einheiten gesamt</p>
-            <p className="text-2xl font-bold text-gray-900 mt-1">
-              {objects.reduce((sum, o) => sum + o.units, 0)}
-            </p>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{totalUnits}</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm text-gray-500">Offene Mieten</p>
-            <p className="text-2xl font-bold text-red-600 mt-1">
-              {objects.reduce((sum, o) => sum + o.open, 0)}
-            </p>
+            <p className="text-2xl font-bold text-red-600 mt-1">{totalOpen}</p>
           </div>
         </div>
 
-        {/* Object Cards */}
-        <div className="grid gap-4">
-          {objects.map((obj) => (
-            <div
-              key={obj.id}
-              className="bg-white rounded-xl border border-gray-200 p-5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
+        {/* Loading State */}
+        {loading && (
+          <div className="text-center py-12 text-gray-500">
+            Objekte werden geladen...
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!loading && objects.length === 0 && (
+          <div className="text-center py-16">
+            <div className="text-5xl mb-4">🏠</div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">
+              Noch keine Objekte angelegt
+            </h2>
+            <p className="text-gray-500 mb-6">
+              Legen Sie Ihr erstes Mietobjekt an, um loszulegen.
+            </p>
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-6 py-2.5 rounded-lg transition-colors"
             >
-              <div className="flex items-start justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    {obj.name}
-                  </h2>
-                  <p className="text-sm text-gray-500 mt-0.5">
-                    {obj.address} · {obj.units} Einheiten
-                  </p>
-                  <StatusBadge
-                    paid={obj.paid}
-                    open={obj.open}
-                    unclear={obj.unclear}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  {obj.open > 0 ? (
-                    <span className="w-3 h-3 rounded-full bg-red-500" title="Offene Mieten" />
-                  ) : (
-                    <span className="w-3 h-3 rounded-full bg-emerald-500" title="Alles bezahlt" />
-                  )}
-                  <svg
-                    className="w-5 h-5 text-gray-400"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    strokeWidth={2}
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M8.25 4.5l7.5 7.5-7.5 7.5"
-                    />
-                  </svg>
+              + Erstes Objekt anlegen
+            </button>
+          </div>
+        )}
+
+        {/* Object Cards */}
+        {!loading && objects.length > 0 && (
+          <div className="grid gap-4">
+            {objects.map((obj) => (
+              <div
+                key={obj.id}
+                className="bg-white rounded-xl border border-gray-200 p-5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {obj.name}
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-0.5">
+                      {obj.address}
+                      {obj.iban && ` · IBAN: ...${obj.iban.slice(-4)}`}
+                    </p>
+                    <StatusBadge paid={0} open={0} unclear={0} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-gray-300" title="Noch keine Daten" />
+                    <svg
+                      className="w-5 h-5 text-gray-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      strokeWidth={2}
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M8.25 4.5l7.5 7.5-7.5 7.5"
+                      />
+                    </svg>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </main>
+
+      {/* Create Object Modal */}
+      <CreateObjectModal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        onCreated={loadObjects}
+      />
     </div>
   );
 }
