@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 
 interface ObjectData {
   id: string;
@@ -182,7 +183,8 @@ export default function Home() {
   const [objects, setObjects] = useState<ObjectData[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
-
+  const router = useRouter();
+  
   const loadObjects = async () => {
     const { data, error } = await supabase
       .from("objects")
@@ -276,6 +278,7 @@ export default function Home() {
             {objects.map((obj) => (
               <div
                 key={obj.id}
+                onClick={() => router.push(`/object/${obj.id}`)}
                 className="bg-white rounded-xl border border-gray-200 p-5 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
               >
                 <div className="flex items-start justify-between">
