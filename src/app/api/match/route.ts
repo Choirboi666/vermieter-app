@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import PDFParser from "pdf2json";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -34,31 +35,127 @@ interface MatchResult {
 
 export async function POST(request: NextRequest) {
   try {
-    const { transactions, tenants } = await request.json();
+    const contentType = request.headers.get("content-type") || "";
 
+    // PDF-Upload: multipart/form-data
+    if (contentType.includes("multipart/form-data")) {
+      const formData = await request.formData();
+      const pdfFile = formData.get("pdf") as File;
+      const tenantsJson = formData.get("tenants") as string;
+
+      if (!pdfFile || !tenantsJson) {
+        return NextResponse.json(
+          { error: "PDF und Mieter werden benötigt" },
+          { status: 400 }
+        );
+      }
+
+      const tenants: Tenant[] = JSON.parse(tenantsJson);
+      const arrayBuffer = await pdfFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // PDF-Text extrahieren
+      const pdfText = await new Promise<string>((resolve, reject) => {
+        const pdfParser = new PDFParser();
+        pdfParser.on("pdfParser_dataError", (err: {parserError: string}) => reject(new Error(err.parserError)));
+        pdfParser.on("pdfParser_dataReady", (data: {Pages: Array<{Texts: Array<{R: Array<{T: string}>}>}>}) => {
+          const text = data.Pages.map(page =>
+            page.Texts.map(t => t.R.map(r => decodeURIComponent(r.T)).join("")).join(" ")
+          ).join("\n");
+          resolve(text);
+        });
+        pdfParser.parseBuffer(buffer);
+      });
+      
+
+      if (!pdfText || pdfText.trim().length < 50) {
+        return NextResponse.json(
+          { error: "PDF konnte nicht gelesen werden oder ist leer. Ist es ein digitaler Bankauszug (kein Scan)?" },
+          { status: 400 }
+        );
+      }
+
+      // Schritt 1: Claude extrahiert Transaktionen aus PDF-Text
+      const transactions = await extractTransactionsFromPDF(pdfText);
+
+      if (transactions.length === 0) {
+        return NextResponse.json(
+          { error: "Keine Zahlungseingänge im PDF gefunden." },
+          { status: 400 }
+        );
+      }
+
+      // Schritt 2: Claude matched Transaktionen zu Mietern
+      const results = await matchTransactions(transactions, tenants);
+      return NextResponse.json({ results, transactionCount: transactions.length });
+    }
+
+    // CSV/XLSX-Upload: JSON body (bisheriger Flow)
+    const { transactions, tenants } = await request.json();
     if (!transactions || !tenants) {
       return NextResponse.json(
         { error: "Transaktionen und Mieter werden benötigt" },
         { status: 400 }
       );
     }
-
     const results = await matchTransactions(transactions, tenants);
     return NextResponse.json({ results });
+
   } catch (error) {
     console.error("Matching error:", error);
     return NextResponse.json(
-      { error: "Fehler beim Matching: " + (error as Error).message },
+      { error: "Fehler: " + (error as Error).message },
       { status: 500 }
     );
   }
+}
+
+async function extractTransactionsFromPDF(pdfText: string): Promise<RawTransaction[]> {
+  const prompt = `Du bist ein Spezialist für deutsche Bankauszüge. Extrahiere alle Zahlungseingänge (Gutschriften, positive Beträge) aus folgendem Bankauszug-Text.
+
+WICHTIG:
+- Nur Zahlungseingänge (Geld das aufs Konto kommt), KEINE Ausgaben
+- Ausgaben erkennst du an: "zu Ihren Lasten", negativen Beträgen, Lastschriften die du bezahlst
+- Eingänge erkennst du an: "zu Ihren Gunsten", SEPA-GUTSCHRIFT, ÜBERWEISUNG (eingehend), positiven Beträgen
+
+Bankauszug-Text:
+${pdfText.substring(0, 15000)}
+
+Antworte NUR mit einem JSON-Array. Jedes Element hat:
+- "date": Datum im Format YYYY-MM-DD
+- "amount": Betrag als Zahl (positiv, z.B. 850.00)
+- "sender": Name des Absenders/Auftraggebers
+- "purpose": Verwendungszweck
+
+Beispiel: [{"date":"2025-01-02","amount":850.00,"sender":"Max Mustermann","purpose":"Miete Januar 2025 Wohnung 2 OG"}]
+
+Antworte NUR mit dem JSON-Array, kein Text davor oder danach.`;
+
+  const message = await anthropic.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 3000,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const responseText =
+    message.content[0].type === "text" ? message.content[0].text : "";
+
+  try {
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch {
+    console.error("Failed to parse transactions from PDF:", responseText);
+  }
+
+  return [];
 }
 
 async function matchTransactions(
   transactions: RawTransaction[],
   tenants: Tenant[]
 ): Promise<MatchResult[]> {
-  // Mieterliste als Text für den Prompt
   const tenantList = tenants
     .map(
       (t) =>
@@ -81,19 +178,19 @@ ${tenantList}
 Hier sind die Banktransaktionen:
 ${transactionList}
 
-Ordne jede Transaktion einem Mieter zu. Nutze folgende Regeln:
-1. Vergleiche den Absender-Namen und Verwendungszweck mit den Mieternamen
+Ordne jede Transaktion einem Mieter zu. Regeln:
+1. Vergleiche Absender-Name und Verwendungszweck mit Mieternamen
 2. Prüfe ob die Mieternummer im Verwendungszweck vorkommt
 3. Vergleiche den Betrag mit der erwarteten Miete
-4. Bei Namensähnlichkeit (z.B. "Mueller" = "Müller", Vorname/Nachname vertauscht) trotzdem zuordnen
+4. Bei Namensähnlichkeit (Mueller = Müller, Vorname/Nachname vertauscht) trotzdem zuordnen
 
 Antworte NUR mit einem JSON-Array. Jedes Element hat:
 - "index": Nummer der Transaktion [0, 1, 2, ...]
-- "tenant_id": Die ID des Mieters (oder null wenn keine Zuordnung möglich)
-- "confidence": Zahl zwischen 0 und 1 (0.9+ = sicher, 0.6-0.9 = wahrscheinlich, unter 0.6 = unklar)
-- "reason": Kurze deutsche Begründung (z.B. "Name 'Müller' im Verwendungszweck, Betrag passt")
+- "tenant_id": Die ID des Mieters (oder null)
+- "confidence": Zahl zwischen 0 und 1
+- "reason": Kurze deutsche Begründung
 
-Antworte NUR mit dem JSON-Array, keine Erklärungen davor oder danach.`;
+Antworte NUR mit dem JSON-Array.`;
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -101,23 +198,19 @@ Antworte NUR mit dem JSON-Array, keine Erklärungen davor oder danach.`;
     messages: [{ role: "user", content: prompt }],
   });
 
-  // Parse Claude's response
   const responseText =
     message.content[0].type === "text" ? message.content[0].text : "";
 
   let matches: { index: number; tenant_id: string | null; confidence: number; reason: string }[];
 
   try {
-    // Versuche JSON aus der Antwort zu extrahieren
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
       matches = JSON.parse(jsonMatch[0]);
     } else {
-      throw new Error("Kein JSON in der Antwort gefunden");
+      throw new Error("Kein JSON gefunden");
     }
   } catch {
-    console.error("Failed to parse Claude response:", responseText);
-    // Fallback: Alle als unklar markieren
     matches = transactions.map((_: RawTransaction, i: number) => ({
       index: i,
       tenant_id: null,
@@ -126,7 +219,6 @@ Antworte NUR mit dem JSON-Array, keine Erklärungen davor oder danach.`;
     }));
   }
 
-  // Ergebnisse zusammenbauen
   const results: MatchResult[] = transactions.map(
     (tx: RawTransaction, i: number) => {
       const match = matches.find((m) => m.index === i) || {

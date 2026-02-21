@@ -50,25 +50,56 @@ export default function BankImportModal({
     failed: number;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [fileType, setFileType] = useState<"csv" | "pdf" | null>(null);
 
   if (!isOpen) return null;
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const buffer = await file.arrayBuffer();
-    const parsed = parseBankCSV(buffer);
+    const isPDF = file.name.toLowerCase().endsWith(".pdf");
+    setFileType(isPDF ? "pdf" : "csv");
 
-    setTransactions(parsed.transactions);
-    setParseErrors(parsed.errors);
+    setStep("matching");
+    setLoading(true);
+    setParseErrors([]);
 
-    if (parsed.transactions.length > 0) {
-      // AI-Matching starten
-      setStep("matching");
-      setLoading(true);
+    try {
+      if (isPDF) {
+        // PDF-Flow: direkt als FormData an API
+        const formData = new FormData();
+        formData.append("pdf", file);
+        formData.append("tenants", JSON.stringify(tenants));
 
-      try {
+        const response = await fetch("/api/match", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.error || response.statusText);
+        }
+
+        const data = await response.json();
+        setTransactions([]); // PDF-Transaktionen kommen nur als Results zurück
+        setResults(data.results);
+        setStep("review");
+      } else {
+        // CSV/XLSX-Flow: bisheriger Weg
+        const buffer = await file.arrayBuffer();
+        const parsed = parseBankCSV(buffer);
+
+        setTransactions(parsed.transactions);
+        setParseErrors(parsed.errors);
+
+        if (parsed.transactions.length === 0) {
+          setStep("upload");
+          setLoading(false);
+          return;
+        }
+
         const response = await fetch("/api/match", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -85,16 +116,13 @@ export default function BankImportModal({
         const data = await response.json();
         setResults(data.results);
         setStep("review");
-      } catch (error) {
-        setParseErrors([
-          ...parsed.errors,
-          "AI-Matching fehlgeschlagen: " + (error as Error).message,
-        ]);
-        setStep("upload");
       }
-
-      setLoading(false);
+    } catch (error) {
+      setParseErrors(["Fehler: " + (error as Error).message]);
+      setStep("upload");
     }
+
+    setLoading(false);
   };
 
   const handleChangeTenant = (index: number, tenantId: string | null) => {
@@ -185,17 +213,18 @@ export default function BankImportModal({
           {step === "upload" && (
             <div className="space-y-6">
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                  CSV-Datei hochladen
+              <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                  Kontoauszug hochladen
                 </h3>
                 <p className="text-sm text-gray-600 mb-3">
-                  Exportieren Sie Ihren Kontoauszug aus dem Online-Banking als
-                  CSV-Datei und laden Sie ihn hier hoch.
+                  Laden Sie Ihren Kontoauszug als CSV, Excel oder PDF hoch.
+                  PDF-Auszüge von Commerzbank und HypoVereinsbank werden
+                  automatisch erkannt.
                 </p>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,.xlsx,.xls"
+                  accept=".csv,.xlsx,.xls,.pdf"
                   onChange={handleFileChange}
                   className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 file:cursor-pointer"
                 />
