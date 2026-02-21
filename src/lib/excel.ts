@@ -1,5 +1,9 @@
 import * as XLSX from "xlsx";
 
+// ============================================================
+// Excel-Vorlage generieren (wird beim Download erzeugt)
+// ============================================================
+
 export function generateMieterlisteTemplate(): Uint8Array {
   const wb = XLSX.utils.book_new();
 
@@ -14,9 +18,13 @@ export function generateMieterlisteTemplate(): Uint8Array {
       "Kaltmiete",
       "Kalte Betriebskosten",
       "Heizkosten",
+      "Befristung",
       "USt.",
       "Bruttogesamtmiete",
       "Einzugsdatum",
+      "Besonderheit",
+      "Gewerbe",
+      "WG-Typ",
     ],
     [
       "M001",
@@ -27,25 +35,33 @@ export function generateMieterlisteTemplate(): Uint8Array {
       500,
       80,
       70,
+      "unbefristet",
       0,
       650,
       "01.08.2023",
+      "",
+      "Nein",
+      "",
     ],
   ];
   const ws1 = XLSX.utils.aoa_to_sheet(mieterData);
 
   ws1["!cols"] = [
-    { wch: 10 },
-    { wch: 20 },
-    { wch: 22 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 12 },
-    { wch: 20 },
-    { wch: 12 },
-    { wch: 8 },
-    { wch: 18 },
-    { wch: 14 },
+    { wch: 10 },  // Nummer
+    { wch: 20 },  // Name
+    { wch: 22 },  // Wohnungsbezeichnung
+    { wch: 12 },  // Fläche
+    { wch: 12 },  // Kaltmiete/m²
+    { wch: 12 },  // Kaltmiete
+    { wch: 20 },  // Kalte BK
+    { wch: 12 },  // Heizkosten
+    { wch: 14 },  // Befristung
+    { wch: 8 },   // USt.
+    { wch: 18 },  // Bruttogesamtmiete
+    { wch: 14 },  // Einzugsdatum
+    { wch: 20 },  // Besonderheit
+    { wch: 10 },  // Gewerbe
+    { wch: 30 },  // WG-Typ
   ];
 
   XLSX.utils.book_append_sheet(wb, ws1, "Mieterliste");
@@ -63,6 +79,7 @@ export function generateMieterlisteTemplate(): Uint8Array {
       "Einzugsdatum",
       "Auszugsdatum",
       "Kaution verbleibend",
+      "Mietschulden",
     ],
     [
       "M000",
@@ -75,6 +92,7 @@ export function generateMieterlisteTemplate(): Uint8Array {
       "01.01.2020",
       "31.12.2024",
       500,
+      0,
     ],
   ];
   const ws2 = XLSX.utils.aoa_to_sheet(ehemaligenData);
@@ -90,34 +108,32 @@ export function generateMieterlisteTemplate(): Uint8Array {
     { wch: 14 },
     { wch: 14 },
     { wch: 18 },
+    { wch: 14 },
   ];
 
   XLSX.utils.book_append_sheet(wb, ws2, "Ehemalige Mieter");
 
-  // Tab 3: Zahlungsliste
+  // Tab 3: Zahlungsliste (leer, nur Header)
   const zahlungData = [
     [
-      "Nummer",
+      "Nr.",
       "Name",
-      "Wohnungsbezeichnung",
-      "Monat",
-      "Soll-Betrag",
-      "Ist-Betrag",
-      "Differenz",
-      "Saldo kumuliert",
+      "Wohnung",
+      "Soll/Monat",
+      "Übertrag Vorjahr",
+      "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+      "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
+      "Summe Ist",
+      "Jahres-Saldo",
     ],
   ];
   const ws3 = XLSX.utils.aoa_to_sheet(zahlungData);
 
   ws3["!cols"] = [
-    { wch: 10 },
-    { wch: 20 },
-    { wch: 22 },
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 14 },
-    { wch: 12 },
-    { wch: 16 },
+    { wch: 6 }, { wch: 22 }, { wch: 20 }, { wch: 13 }, { wch: 13 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+    { wch: 13 }, { wch: 13 },
   ];
 
   XLSX.utils.book_append_sheet(wb, ws3, "Zahlungsliste");
@@ -125,6 +141,10 @@ export function generateMieterlisteTemplate(): Uint8Array {
   const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" });
   return new Uint8Array(buf);
 }
+
+// ============================================================
+// Import-Datentyp für einen Mieter
+// ============================================================
 
 export interface MieterImportRow {
   number: string | null;
@@ -138,12 +158,21 @@ export interface MieterImportRow {
   vat: number | null;
   rent_total: number;
   move_in_date: string | null;
+  // Neue Felder
+  lease_end: string | null;       // Befristung (Datum oder "unbefristet")
+  is_commercial: boolean;         // Gewerbe ja/nein
+  wg_type: string | null;         // "A", "B", "C" oder null
+  notes: string | null;           // Besonderheit/Bemerkungen
 }
+
+// ============================================================
+// Hilfsfunktion: Datum parsen (verschiedene Formate)
+// ============================================================
 
 function parseDate(value: unknown): string | null {
   if (!value) return null;
 
-  // Wenn es ein Date-Objekt ist (Excel speichert Daten oft so)
+  // Excel Date-Objekt
   if (value instanceof Date) {
     const day = String(value.getDate()).padStart(2, "0");
     const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -154,7 +183,7 @@ function parseDate(value: unknown): string | null {
   const str = String(value).trim();
   if (!str) return null;
 
-  // Format: DD.MM.YYYY
+  // DD.MM.YYYY
   const deMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
   if (deMatch) {
     const day = deMatch[1].padStart(2, "0");
@@ -163,10 +192,10 @@ function parseDate(value: unknown): string | null {
     return `${year}-${month}-${day}`;
   }
 
-  // Format: YYYY-MM-DD
-  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  // YYYY-MM-DD (mit optionaler Uhrzeit)
+  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoMatch) {
-    return str;
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
   }
 
   // Excel serial number
@@ -182,14 +211,63 @@ function parseDate(value: unknown): string | null {
   return null;
 }
 
+// ============================================================
+// Hilfsfunktion: Befristung parsen
+// Kann ein Datum sein oder "unbefristet"
+// ============================================================
+
+function parseLease(value: unknown): string | null {
+  if (!value) return null;
+  const str = String(value).trim().toLowerCase();
+  if (str === "unbefristet") return "unbefristet";
+
+  // Versuche als Datum zu parsen
+  const dateResult = parseDate(value);
+  if (dateResult) return dateResult;
+
+  // Wenn es ein anderer Text ist, als String übernehmen
+  return String(value).trim() || null;
+}
+
+// ============================================================
+// Hilfsfunktion: WG-Typ aus Dropdown-Text extrahieren
+// Input kann "A - Einzelverträge pro Zimmer" oder nur "A" sein
+// ============================================================
+
+function parseWgType(value: unknown): string | null {
+  if (!value) return null;
+  const str = String(value).trim();
+  if (!str) return null;
+
+  // Wenn es mit A, B oder C anfängt, den Buchstaben nehmen
+  const match = str.match(/^([ABC])/i);
+  if (match) return match[1].toUpperCase();
+
+  return null;
+}
+
+// ============================================================
+// Hilfsfunktion: Gewerbe-Flag parsen
+// ============================================================
+
+function parseCommercial(value: unknown): boolean {
+  if (!value) return false;
+  const str = String(value).trim().toLowerCase();
+  return str === "ja" || str === "yes" || str === "true" || str === "1";
+}
+
+// ============================================================
+// Mieterliste parsen (erstes Sheet der Excel-Datei)
+// ============================================================
+
 export function parseMieterliste(file: ArrayBuffer): {
   rows: MieterImportRow[];
   errors: string[];
 } {
   const wb = XLSX.read(file, { type: "array" });
 
-  // Erstes Sheet lesen (Mieterliste)
-  const sheetName = wb.SheetNames[0];
+  // Sheet "Mieterliste" gezielt lesen (nicht einfach das erste Sheet)
+  const sheetName = wb.SheetNames.find(s => s.toLowerCase().includes("mieterliste")) || wb.SheetNames[0];
   const ws = wb.Sheets[sheetName];
   const rawData = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws);
 
@@ -199,7 +277,7 @@ export function parseMieterliste(file: ArrayBuffer): {
   rawData.forEach((row, index) => {
     const rowNum = index + 2;
 
-    // Flexible Spaltenerkennung
+    // Flexible Spaltenerkennung für Pflichtfelder
     const name =
       (row["Name"] as string) ||
       (row["name"] as string) ||
@@ -210,26 +288,63 @@ export function parseMieterliste(file: ArrayBuffer): {
       (row["Wohnung"] as string) ||
       (row["Einheit"] as string) ||
       "";
-    const rentTotal = parseFloat(
-      String(
-        row["Bruttogesamtmiete"] ||
-          row["Gesamtmiete"] ||
-          row["Bruttomiete"] ||
-          0
-      )
-    );
 
-    if (!name.trim()) {
-      errors.push(`Zeile ${rowNum}: Name fehlt`);
+    // Name mit ↳-Prefix bereinigen (WG-Mitglieder aus unserer Vorlage)
+    const cleanName = name.replace(/^\s*↳\s*/, "").trim();
+
+    if (!cleanName) {
+      // Leere Zeilen oder "Leerstand" ohne Name überspringen
       return;
     }
     if (!unitLabel.trim()) {
-      errors.push(`Zeile ${rowNum}: Wohnungsbezeichnung fehlt`);
+      errors.push(`Zeile ${rowNum}: Wohnungsbezeichnung fehlt für "${cleanName}"`);
       return;
     }
-    if (!rentTotal || rentTotal <= 0) {
-      errors.push(`Zeile ${rowNum}: Bruttogesamtmiete fehlt oder ist 0`);
-      return;
+
+    // Bruttogesamtmiete: kann eine Formel sein (wird dann als 0 gelesen)
+    // In dem Fall berechnen wir sie aus den Einzelwerten
+    let rentTotalRaw = row["Bruttogesamtmiete"] || row["Gesamtmiete"] || row["Bruttomiete"] || 0;
+    let rentTotal = parseFloat(String(rentTotalRaw)) || 0;
+
+    // Wenn Bruttogesamtmiete 0 ist aber Einzelwerte vorhanden → selbst berechnen
+    if (rentTotal <= 0) {
+      const cold = parseFloat(String(row["Kaltmiete"] || 0)) || 0;
+      const bk = parseFloat(String(row["Kalte Betriebskosten"] || row["Betriebskosten"] || row["NK"] || 0)) || 0;
+      const hk = parseFloat(String(row["Heizkosten"] || row["HK"] || 0)) || 0;
+      const ust = parseFloat(String(row["USt."] || row["USt"] || row["MwSt"] || 0)) || 0;
+      const calculated = cold + bk + hk + ust;
+      if (calculated > 0) {
+        rentTotal = calculated;
+      }
+    }
+
+    // Leerstand erkennen
+    const isLeerstand = cleanName.toLowerCase() === "leerstand";
+
+    // Gewerbe-Flag und WG-Typ schon hier lesen (brauchen wir für Validierung)
+    const isCommercial = parseCommercial(row["Gewerbe"] || null);
+    const wgType = parseWgType(row["WG-Typ"] || row["WG Typ"] || null);
+
+    // Bei Gewerbemietern: USt. selbst berechnen wenn sie eine Formel ist
+    if (isCommercial && rentTotal > 0) {
+      const cold = parseFloat(String(row["Kaltmiete"] || 0)) || 0;
+      const bk = parseFloat(String(row["Kalte Betriebskosten"] || row["Betriebskosten"] || 0)) || 0;
+      const hk = parseFloat(String(row["Heizkosten"] || row["HK"] || 0)) || 0;
+      const ustRaw = parseFloat(String(row["USt."] || row["USt"] || 0)) || 0;
+      // Wenn USt. 0 ist aber Gewerbe → 19% berechnen
+      if (ustRaw <= 0 && cold > 0) {
+        const ustCalc = (cold + bk + hk) * 0.19;
+        rentTotal = cold + bk + hk + ustCalc;
+      }
+    }
+
+    // Bei echten Mietern (nicht Leerstand, nicht WG-Sub) muss Miete > 0 sein
+    if (!isLeerstand && rentTotal <= 0) {
+      // WG-Mitbewohner Typ B/C ohne eigene Miete ist OK
+      if (!wgType || wgType === "A") {
+        errors.push(`Zeile ${rowNum}: Bruttogesamtmiete fehlt oder ist 0 für "${cleanName}"`);
+        return;
+      }
     }
 
     const moveInDate = parseDate(
@@ -238,34 +353,29 @@ export function parseMieterliste(file: ArrayBuffer): {
 
     rows.push({
       number: String(row["Nummer"] || row["Nr."] || row["Nr"] || "") || null,
-      name: name.trim(),
+      name: cleanName,
       unit_label: unitLabel.trim(),
       area_sqm:
-        parseFloat(
-          String(row["Fläche (m²)"] || row["Fläche"] || row["m²"] || 0)
-        ) || null,
+        parseFloat(String(row["Fläche (m²)"] || row["Fläche"] || row["m²"] || 0)) || null,
       rent_per_sqm:
-        parseFloat(
-          String(row["Kaltmiete/m²"] || row["Kaltmiete/qm"] || 0)
-        ) || null,
+        parseFloat(String(row["Kaltmiete/m²"] || row["Kaltmiete/qm"] || 0)) || null,
       rent_cold: parseFloat(String(row["Kaltmiete"] || 0)) || null,
       utilities_cold:
-        parseFloat(
-          String(
-            row["Kalte Betriebskosten"] ||
-              row["Betriebskosten"] ||
-              row["NK"] ||
-              0
-          )
-        ) || null,
+        parseFloat(String(row["Kalte Betriebskosten"] || row["Betriebskosten"] || row["NK"] || 0)) || null,
       heating_costs:
         parseFloat(String(row["Heizkosten"] || row["HK"] || 0)) || null,
       vat:
-        parseFloat(
-          String(row["USt."] || row["USt"] || row["MwSt"] || 0)
-        ) || null,
+        parseFloat(String(row["USt."] || row["USt"] || row["MwSt"] || 0)) || 
+        (isCommercial ? ((parseFloat(String(row["Kaltmiete"] || 0)) || 0) + 
+          (parseFloat(String(row["Kalte Betriebskosten"] || row["Betriebskosten"] || 0)) || 0) + 
+          (parseFloat(String(row["Heizkosten"] || row["HK"] || 0)) || 0)) * 0.19 : null),
       rent_total: rentTotal,
       move_in_date: moveInDate,
+      // Neue Felder
+      lease_end: parseLease(row["Befristung"] || row["Vertragslaufzeit"] || null),
+      is_commercial: isCommercial,
+      wg_type: wgType,
+      notes: String(row["Besonderheit"] || row["Bemerkungen"] || row["Notizen"] || "").trim() || null,
     });
   });
 
