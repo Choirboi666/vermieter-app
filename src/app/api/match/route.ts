@@ -139,7 +139,7 @@ Antworte NUR mit dem JSON-Array, kein Text davor oder danach.`;
 
   const responseText =
     message.content[0].type === "text" ? message.content[0].text : "";
-
+    console.log("AI response:", responseText.substring(0, 500));
   try {
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
@@ -194,13 +194,13 @@ Antworte NUR mit dem JSON-Array.`;
 
   const message = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 2000,
+    max_tokens: 4096,
     messages: [{ role: "user", content: prompt }],
   });
 
   const responseText =
     message.content[0].type === "text" ? message.content[0].text : "";
-
+    console.log("AI response:", responseText.substring(0, 500));
   let matches: { index: number; tenant_id: string | null; confidence: number; reason: string }[];
 
   try {
