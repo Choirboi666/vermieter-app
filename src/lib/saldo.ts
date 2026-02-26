@@ -130,6 +130,7 @@ export function calcTenantSaldo(
   earliestDataMonth?: string, // Frühester Monat mit importierten Daten (für das Objekt)
   latestDataMonth?: string, // Letzter Monat mit Importdaten – Soll nur bis hier generieren
   wgMemberIds?: string[], // Bei WG Typ B/C: IDs aller WG-Mitglieder deren Zahlungen zusammengerechnet werden
+  rentReductions?: Map<string, number>, // month → Minderungsbetrag
 ): TenantSaldo {
   const currentMonth = getCurrentMonth();
   // Soll bis zum letzten importierten Monat + 1 (weil 25er-Regel Zahlungen
@@ -200,7 +201,10 @@ export function calcTenantSaldo(
 
   // Alle Monate vom Start bis zum letzten Importmonat generieren
   const allMonths = generateMonths(startMonth, sollEndMonth);
-  const totalSoll = allMonths.length * rentTotal;
+  const totalSoll = allMonths.reduce((sum, month) => {
+    const reduction = rentReductions?.get(month) || 0;
+    return sum + Math.max(0, rentTotal - reduction);
+  }, 0);
 
   // Zahlungen nach effektivem Monat gruppieren (25er-Regel für Anzeige)
   const paymentsByEffectiveMonth = new Map<string, Transaction[]>();
@@ -215,7 +219,8 @@ export function calcTenantSaldo(
   // Wir gehen Monat für Monat durch und "verbrauchen" das Guthaben
   let remainingCredit = totalPaid;
   const months: MonthStatus[] = allMonths.map((month) => {
-    const soll = rentTotal;
+    const reduction = rentReductions?.get(month) || 0;
+    const soll = Math.max(0, rentTotal - reduction);
     let covered = 0;
 
     if (remainingCredit >= soll) {

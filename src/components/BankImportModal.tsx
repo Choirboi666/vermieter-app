@@ -48,6 +48,7 @@ export default function BankImportModal({
   const [saveResult, setSaveResult] = useState<{
     success: number;
     failed: number;
+    skipped: number;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileType, setFileType] = useState<"csv" | "pdf" | null>(null);
@@ -146,17 +147,33 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setSaving(true);
     let success = 0;
     let failed = 0;
+    let skipped = 0;
+
+    // Bestehende Transaktionen laden für Duplikat-Check
+    const { data: existingTx } = await supabase.from("transactions")
+      .select("date, amount, purpose_raw")
+      .eq("object_id", objectId);
+    const existingKeys = new Set(
+      (existingTx || []).map((t: any) => `${t.date}|${t.amount}|${t.purpose_raw}`)
+    );
 
     for (const result of results) {
-      // Monat aus dem Datum berechnen
-      const monthPeriod = result.date.substring(0, 7); // YYYY-MM
+      const monthPeriod = result.date.substring(0, 7);
+      const purposeRaw = `${result.sender}: ${result.purpose}`;
+      const key = `${result.date}|${result.amount}|${purposeRaw}`;
+
+      // Duplikat-Check
+      if (existingKeys.has(key)) {
+        skipped++;
+        continue;
+      }
 
       const { error } = await supabase.from("transactions").insert({
         object_id: objectId,
         tenant_id: result.tenant_id,
         date: result.date,
         amount: result.amount,
-        purpose_raw: `${result.sender}: ${result.purpose}`,
+        purpose_raw: purposeRaw,
         confidence: result.confidence,
         match_reason: result.match_reason,
         status: result.status,
@@ -170,7 +187,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       }
     }
 
-    setSaveResult({ success, failed });
+    setSaveResult({ success, failed, skipped });
     setStep("done");
     setSaving(false);
     onImported();
@@ -366,7 +383,7 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
           {/* Step 4: Done */}
           {step === "done" && saveResult && (
             <div className="text-center py-8">
-              <div className="text-5xl mb-4">🎉</div>
+              <div className="text-5xl mb-4">{saveResult.skipped > 0 && saveResult.success === 0 ? "ℹ️" : "🎉"}</div>
               <h3 className="text-lg font-semibold text-gray-900 mb-2">
                 Bankimport abgeschlossen!
               </h3>
@@ -374,13 +391,20 @@ const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
                 <span className="text-emerald-600 font-medium">
                   {saveResult.success} Transaktionen gespeichert
                 </span>
+                {saveResult.skipped > 0 && (
+                  <span className="text-amber-600 font-medium">
+                    {" "}· {saveResult.skipped} Duplikate übersprungen
+                  </span>
+                )}
                 {saveResult.failed > 0 && (
                   <span className="text-red-600 font-medium">
-                    {" "}
-                    · {saveResult.failed} fehlgeschlagen
+                    {" "}· {saveResult.failed} fehlgeschlagen
                   </span>
                 )}
               </p>
+              {saveResult.skipped > 0 && (
+                <p className="text-xs text-gray-400 mt-2">Bereits vorhandene Transaktionen wurden nicht erneut importiert.</p>
+              )}
             </div>
           )}
         </div>
