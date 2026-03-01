@@ -5,6 +5,8 @@ import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import ExcelImportModal from "@/components/ExcelImportModal";
 import BankImportModal from "@/components/BankImportModal";
+import DunningModal from "@/components/DunningModal";
+import LandlordSettingsModal from "@/components/LandlordSettingsModal";
 import {
   calcTenantSaldo,
   calcMemberPayments,
@@ -23,6 +25,13 @@ interface ObjectData {
   iban: string | null;
   bic: string | null;
   account_holder: string | null;
+  landlord_name: string | null;
+  landlord_address: string | null;
+  landlord_city: string | null;
+  landlord_phone: string | null;
+  landlord_email: string | null;
+  object_street: string | null;
+  object_city: string | null;
 }
 
 interface Tenant {
@@ -44,6 +53,12 @@ interface Tenant {
   wg_type: string | null;
   notes: string | null;
   starting_balance: number | null;
+  contact_street: string | null;
+  contact_zip: string | null;
+  contact_city: string | null;
+  contact_email: string | null;
+  contact_phone1: string | null;
+  contact_phone2: string | null;
 }
 
 // Betrag farbig anzeigen: grün wenn >= soll, rot wenn darunter
@@ -367,6 +382,17 @@ function TenantDetailModal({ tenant, saldo, isOpen, onClose }: { tenant: Tenant 
             <div><p className="text-xs text-gray-500 uppercase tracking-wide">Befristung</p><p className="text-sm font-medium text-gray-900 mt-1">{tenant.lease_end || "–"}</p></div>
           </div>
           {tenant.notes && <div className="mt-3 p-2 bg-gray-50 rounded-lg"><p className="text-xs text-gray-500">💬 {tenant.notes}</p></div>}
+          {(tenant.contact_street || tenant.contact_email || tenant.contact_phone1) && (
+            <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1.5">Kontaktdaten</p>
+              <div className="grid grid-cols-2 gap-2 text-xs text-gray-700">
+                {tenant.contact_street && <div><span className="text-gray-400">Adresse: </span>{tenant.contact_street}{tenant.contact_zip && `, ${tenant.contact_zip}`}{tenant.contact_city && ` ${tenant.contact_city}`}</div>}
+                {tenant.contact_email && <div><span className="text-gray-400">E-Mail: </span>{tenant.contact_email}</div>}
+                {tenant.contact_phone1 && <div><span className="text-gray-400">Tel: </span>{tenant.contact_phone1}</div>}
+                {tenant.contact_phone2 && <div><span className="text-gray-400">Tel 2: </span>{tenant.contact_phone2}</div>}
+              </div>
+            </div>
+          )}
         </div>
         <div className="p-6 border-b border-gray-100">
           <div className="grid grid-cols-3 gap-3">
@@ -727,6 +753,8 @@ export default function ObjectDashboard({ params }: { params: Promise<{ id: stri
   const [showTenantChange, setShowTenantChange] = useState(false);
   const [showExcelImport, setShowExcelImport] = useState(false);
   const [showBankImport, setShowBankImport] = useState(false);
+  const [showDunning, setShowDunning] = useState(false);
+  const [showLandlordSettings, setShowLandlordSettings] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
   const [activeTab, setActiveTab] = useState<"active" | "former">("active");
   const [actionLog, setActionLog] = useState<{id: string; action_type: string; description: string; undo_data: any; created_at: string}[]>([]);
@@ -814,6 +842,13 @@ export default function ObjectDashboard({ params }: { params: Promise<{ id: stri
   }, [transactions]);
 
   const currentMonthImported = latestDataMonth === currentMonth;
+
+  // Alle Monate mit zugeordneten Transaktionen
+  const importedMonths = useMemo(() => {
+    return new Set(transactions.filter((t) => t.tenant_id).map((t) => t.date.substring(0, 7)));
+  }, [transactions]);
+
+  const prevMonthImported = importedMonths.has(prevMonth);
 
   // WG-Gruppen ermitteln (Typ B/C: gleiche unit_label, wg_type B oder C)
   const wgGroups = useMemo(() => {
@@ -918,7 +953,9 @@ export default function ObjectDashboard({ params }: { params: Promise<{ id: stri
             {/* Karte 1: Letzter Monat */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold text-gray-900">{formatMonthLong(prevMonth)}</h3><span className="text-xs text-gray-400">Abgeschlossen</span></div>
-              {!earliestDataMonth || prevMonth < earliestDataMonth ? <p className="text-sm text-gray-400">Keine Daten</p> : (<>
+              {!prevMonthImported ? (
+                <div className="flex items-center gap-2 mt-2"><span className="w-2 h-2 rounded-full bg-red-500"/><p className="text-sm text-gray-500">Kontoauszug noch nicht importiert</p></div>
+              ) : (<>
                 <p className="text-xs text-gray-500 mb-0.5">Soll: {totalRentExpected.toLocaleString("de-DE",{style:"currency",currency:"EUR"})}</p>
                 <p className={`text-2xl font-bold ${prevMonthPaidTotal >= totalRentExpected ? "text-emerald-600" : "text-red-600"}`}>{prevMonthPaidTotal.toLocaleString("de-DE",{style:"currency",currency:"EUR"})}</p>
                 <p className="text-xs text-gray-400 mt-1">Ist-Eingang</p>
@@ -967,6 +1004,8 @@ export default function ObjectDashboard({ params }: { params: Promise<{ id: stri
           <button onClick={() => setShowTenantChange(true)} className="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg border border-gray-300 transition-colors inline-flex items-center gap-1.5"><svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" /></svg>Mieterwechsel</button>
           <button onClick={() => setShowExcelImport(true)} className="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg border border-gray-300 transition-colors inline-flex items-center gap-1.5"><svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>Mieterliste</button>
           <button onClick={() => setShowBankImport(true)} className="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg border border-gray-300 transition-colors inline-flex items-center gap-1.5"><svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0012 9.75c-2.551 0-5.056.2-7.5.582V21" /></svg>Bankauszug</button>
+          <button onClick={() => setShowDunning(true)} className="bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg border border-gray-300 transition-colors inline-flex items-center gap-1.5"><svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" /></svg>Mahnungen</button>
+          <button onClick={() => setShowLandlordSettings(true)} className={`text-sm font-medium px-4 py-2 rounded-lg border transition-colors inline-flex items-center gap-1.5 ${!object.landlord_name ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-300" : "bg-white hover:bg-gray-50 text-gray-700 border-gray-300"}`}><svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.43.992a7.723 7.723 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>{!object.landlord_name ? "Vermieter-Daten hinterlegen" : "Einstellungen"}</button>
           {/* Undo Button */}
           <div className="relative">
             <button onClick={() => setShowUndo(!showUndo)}
@@ -1089,9 +1128,53 @@ export default function ObjectDashboard({ params }: { params: Promise<{ id: stri
 
       <AddTenantModal isOpen={showAddTenant} onClose={() => setShowAddTenant(false)} onCreated={loadData} objectId={id}/>
       <TenantChangeModal isOpen={showTenantChange} onClose={() => setShowTenantChange(false)} onCreated={loadData} objectId={id} tenants={tenants} onLog={logAction}/>
-      <ExcelImportModal isOpen={showExcelImport} onClose={() => setShowExcelImport(false)} onImported={loadData} objectId={id}/>
+      <ExcelImportModal isOpen={showExcelImport} onClose={() => setShowExcelImport(false)} onImported={loadData} objectId={id} objectStreet={object?.object_street || null} objectCity={object?.object_city || null} objectName={object?.name} tenants={tenants as any} transactions={transactions.map(t => ({ tenant_id: t.tenant_id, date: t.date, amount: t.amount, month_period: t.month_period }))}/>
       <BankImportModal isOpen={showBankImport} onClose={() => setShowBankImport(false)} onImported={loadData} objectId={id} tenants={activeTenants}/>
       <TenantDetailModal tenant={selectedTenant} saldo={selectedTenant ? tenantSaldos.get(selectedTenant.id) || null : null} isOpen={!!selectedTenant} onClose={() => setSelectedTenant(null)}/>
+      {object && <DunningModal
+        isOpen={showDunning}
+        onClose={() => setShowDunning(false)}
+        objectId={id}
+        objectName={object.name}
+        objectAddress={object.address}
+        objectIban={object.iban}
+        objectBic={object.bic}
+        landlordName={object.landlord_name}
+        landlordAddress={object.landlord_address}
+        landlordCity={object.landlord_city}
+        landlordPhone={object.landlord_phone}
+        landlordEmail={object.landlord_email}
+        tenants={activeTenants.map(t => ({
+          id: t.id,
+          name: t.name,
+          unit_label: t.unit_label,
+          rent_total: t.rent_total,
+          is_active: t.is_active,
+          address: [t.contact_street, t.contact_zip && t.contact_city ? `${t.contact_zip} ${t.contact_city}` : null].filter(Boolean).join(", ") || undefined,
+          wg_main_tenant_id: (t as any).wg_main_tenant_id || null,
+        }))}
+        transactions={transactions.map(t => ({
+          id: t.id,
+          tenant_id: t.tenant_id,
+          date: t.date,
+          amount: t.amount,
+          month_period: t.month_period,
+        }))}
+      />}
+      {object && <LandlordSettingsModal
+        isOpen={showLandlordSettings}
+        onClose={() => setShowLandlordSettings(false)}
+        onSaved={loadData}
+        objectId={id}
+        objectName={object.name}
+        objectStreet={object.object_street}
+        objectCity={object.object_city}
+        landlordName={object.landlord_name}
+        landlordAddress={object.landlord_address}
+        landlordCity={object.landlord_city}
+        landlordPhone={object.landlord_phone}
+        landlordEmail={object.landlord_email}
+      />}
     </div>
   );
 }

@@ -5,7 +5,12 @@ import { supabase } from "@/lib/supabase";
 import {
   generateMieterlisteTemplate,
   parseMieterliste,
+  parseKontaktliste,
+  generateExport,
   MieterImportRow,
+  KontaktImportRow,
+  type ExportTenant,
+  type ExportTransaction,
 } from "@/lib/excel";
 
 export default function ExcelImportModal({
@@ -13,20 +18,33 @@ export default function ExcelImportModal({
   onClose,
   onImported,
   objectId,
+  objectStreet,
+  objectCity,
+  objectName,
+  tenants: allTenants,
+  transactions: allTransactions,
 }: {
   isOpen: boolean;
   onClose: () => void;
   onImported: () => void;
   objectId: string;
+  objectStreet?: string | null;
+  objectCity?: string | null;
+  objectName?: string;
+  tenants?: ExportTenant[];
+  transactions?: ExportTransaction[];
 }) {
   const [step, setStep] = useState<"upload" | "preview" | "done">("upload");
   const [rows, setRows] = useState<MieterImportRow[]>([]);
+  const [kontaktRows, setKontaktRows] = useState<KontaktImportRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
   const [existingCount, setExistingCount] = useState(0);
   const [importResult, setImportResult] = useState<{
     success: number;
     failed: number;
+    contacts: number;
+    contactsFailed: number;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -64,9 +82,16 @@ export default function ExcelImportModal({
     if (!file) return;
 
     const buffer = await file.arrayBuffer();
-    const result = parseMieterliste(buffer);
-    setRows(result.rows);
-    setErrors(result.errors);
+
+    // Mieterliste parsen (Tab 1)
+    const mieterResult = parseMieterliste(buffer);
+
+    // Kontaktliste parsen (Tab 4, falls vorhanden)
+    const kontaktResult = parseKontaktliste(buffer);
+
+    setRows(mieterResult.rows);
+    setKontaktRows(kontaktResult.rows);
+    setErrors([...mieterResult.errors, ...kontaktResult.errors]);
     setStep("preview");
   };
 
@@ -90,8 +115,11 @@ export default function ExcelImportModal({
     let success = 0;
     let failed = 0;
 
+    // Speichere eingefügte Mieter mit Name+Wohnung für Kontakt-Matching
+    const insertedTenants: { id: string; name: string; unit_label: string }[] = [];
+
     for (const row of rows) {
-      const { error } = await supabase.from("tenants").insert({
+      const { data, error } = await supabase.from("tenants").insert({
         object_id: objectId,
         number: row.number,
         name: row.name,
@@ -104,17 +132,83 @@ export default function ExcelImportModal({
         vat: row.vat,
         rent_total: row.rent_total,
         move_in_date: row.move_in_date,
+        lease_end: row.lease_end === "unbefristet" ? null : row.lease_end,
+        is_commercial: row.is_commercial,
+        wg_type: row.wg_type,
+        notes: row.notes,
         is_active: true,
-      });
+      }).select("id, name, unit_label").single();
 
       if (error) {
         failed++;
-      } else {
+      } else if (data) {
         success++;
+        insertedTenants.push(data);
       }
     }
 
-    setImportResult({ success, failed });
+    // Schritt 3: Kontaktdaten zuordnen (wenn Tab vorhanden)
+    let contacts = 0;
+    let contactsFailed = 0;
+
+    if (kontaktRows.length > 0) {
+      for (const kontakt of kontaktRows) {
+        // Match über Name + Wohnungsbezeichnung (case-insensitive)
+        const match = insertedTenants.find(
+          (t) =>
+            t.name.toLowerCase().trim() === kontakt.name.toLowerCase().trim() &&
+            t.unit_label.toLowerCase().trim() === kontakt.unit_label.toLowerCase().trim()
+        );
+
+        if (match) {
+          // Fallback: Wenn keine Adresse im Kontakt → Objektadresse verwenden
+          const street = kontakt.contact_street || objectStreet || null;
+          const zip = kontakt.contact_zip || (objectCity ? objectCity.split(" ")[0] : null);
+          const city = kontakt.contact_city || (objectCity ? objectCity.split(" ").slice(1).join(" ") : null);
+
+          const { error } = await supabase
+            .from("tenants")
+            .update({
+              contact_street: street,
+              contact_zip: zip,
+              contact_city: city,
+              contact_email: kontakt.contact_email,
+              contact_phone1: kontakt.contact_phone1,
+              contact_phone2: kontakt.contact_phone2,
+            })
+            .eq("id", match.id);
+
+          if (error) {
+            contactsFailed++;
+          } else {
+            contacts++;
+          }
+        } else {
+          contactsFailed++;
+        }
+      }
+    }
+
+    // Fallback: Mieter ohne Kontakteintrag bekommen die Objektadresse
+    if (objectStreet || objectCity) {
+      const kontaktNames = new Set(kontaktRows.map(k => `${k.name.toLowerCase().trim()}|${k.unit_label.toLowerCase().trim()}`));
+      const tenantsWithoutContact = insertedTenants.filter(
+        (t) => !kontaktNames.has(`${t.name.toLowerCase().trim()}|${t.unit_label.toLowerCase().trim()}`)
+      );
+      if (tenantsWithoutContact.length > 0) {
+        const fallbackZip = objectCity ? objectCity.split(" ")[0] : null;
+        const fallbackCity = objectCity ? objectCity.split(" ").slice(1).join(" ") : null;
+        for (const t of tenantsWithoutContact) {
+          await supabase.from("tenants").update({
+            contact_street: objectStreet || null,
+            contact_zip: fallbackZip,
+            contact_city: fallbackCity,
+          }).eq("id", t.id);
+        }
+      }
+    }
+
+    setImportResult({ success, failed, contacts, contactsFailed });
     setStep("done");
     setImporting(false);
     onImported();
@@ -123,6 +217,7 @@ export default function ExcelImportModal({
   const handleClose = () => {
     setStep("upload");
     setRows([]);
+    setKontaktRows([]);
     setErrors([]);
     setImportResult(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -135,7 +230,7 @@ export default function ExcelImportModal({
         {/* Header */}
         <div className="p-6 border-b border-gray-100">
           <h2 className="text-lg font-semibold text-gray-900">
-            📄 Mieterliste importieren
+            Mieterliste
           </h2>
           <p className="text-sm text-gray-500 mt-1">
             {step === "upload" &&
@@ -149,20 +244,47 @@ export default function ExcelImportModal({
           {/* Step 1: Upload */}
           {step === "upload" && (
             <div className="space-y-6">
+              {/* Export aktuelle Daten */}
+              {allTenants && allTenants.length > 0 && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-emerald-900 mb-2">
+                    Mieterliste exportieren
+                  </h3>
+                  <p className="text-sm text-emerald-700 mb-3">
+                    Aktuelle Daten als Excel herunterladen (Mieterliste, Ehemalige, Zahlungen, Kontakte).
+                  </p>
+                  <button
+                    onClick={async () => {
+                      const data = await generateExport(objectName || "Export", allTenants, allTransactions || []);
+                      const blob = new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `Mieterliste_${(objectName || "Export").replace(/\s+/g, "_")}.xlsx`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+                  >
+                    Exportieren
+                  </button>
+                </div>
+              )}
+
               {/* Download Template */}
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                 <h3 className="text-sm font-semibold text-blue-900 mb-2">
                   Schritt 1: Vorlage herunterladen
                 </h3>
                 <p className="text-sm text-blue-700 mb-3">
-                  Die Vorlage enthält alle benötigten Spalten und einen
-                  Beispielmieter. Befüllen Sie sie mit Ihren Mieterdaten.
+                  Die Vorlage enthält 4 Tabs: Mieterliste, Ehemalige, Zahlungsliste und Kontakte.
+                  Befüllen Sie mindestens die Mieterliste. Der Tab "Kontakte" ist optional – dort können Sie Adressen, E-Mail und Telefonnummern Ihrer Mieter hinterlegen.
                 </p>
                 <button
                   onClick={handleDownloadTemplate}
                   className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
                 >
-                  📥 Vorlage herunterladen
+                  Vorlage herunterladen
                 </button>
               </div>
 
@@ -193,7 +315,7 @@ export default function ExcelImportModal({
               {existingCount > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                   <h3 className="text-sm font-semibold text-amber-800 mb-1">
-                    ⚠️ Bestehende Mieterliste wird ersetzt
+                    Bestehende Mieterliste wird ersetzt
                   </h3>
                   <p className="text-sm text-amber-700">
                     {existingCount} bestehende aktive Mieter werden entfernt und
@@ -207,7 +329,7 @@ export default function ExcelImportModal({
               {errors.length > 0 && (
                 <div className="bg-red-50 border border-red-200 rounded-xl p-4">
                   <h3 className="text-sm font-semibold text-red-800 mb-2">
-                    ❌ Fehler ({errors.length})
+                    Fehler ({errors.length})
                   </h3>
                   <ul className="space-y-1">
                     {errors.map((err, i) => (
@@ -219,12 +341,13 @@ export default function ExcelImportModal({
                 </div>
               )}
 
-              {/* Preview Table */}
+              {/* Preview Table - Mieterliste */}
               {rows.length > 0 && (
                 <>
                   <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
                     <p className="text-sm font-medium text-emerald-800">
-                      ✅ {rows.length} Mieter erkannt und bereit zum Import
+                      {rows.length} Mieter erkannt
+                      {kontaktRows.length > 0 && ` · ${kontaktRows.length} Kontaktdatensätze`}
                     </p>
                   </div>
 
@@ -250,36 +373,54 @@ export default function ExcelImportModal({
                           <th className="text-left px-3 py-2 text-xs font-medium text-gray-500">
                             Einzug
                           </th>
+                          <th className="text-left px-3 py-2 text-xs font-medium text-gray-500">
+                            Kontakt
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map((row, i) => (
-                          <tr
-                            key={i}
-                            className="border-b border-gray-50 hover:bg-gray-50"
-                          >
-                            <td className="px-3 py-2 text-gray-500">
-                              {row.number || "–"}
-                            </td>
-                            <td className="px-3 py-2 font-medium text-gray-900">
-                              {row.name}
-                            </td>
-                            <td className="px-3 py-2 text-gray-600">
-                              {row.unit_label}
-                            </td>
-                            <td className="px-3 py-2 text-gray-600 text-right">
-                              {row.rent_cold
-                                ? `${row.rent_cold.toFixed(2)} €`
-                                : "–"}
-                            </td>
-                            <td className="px-3 py-2 font-medium text-gray-900 text-right">
-                              {row.rent_total.toFixed(2)} €
-                            </td>
-                            <td className="px-3 py-2 text-gray-500">
-                              {row.move_in_date || "–"}
-                            </td>
-                          </tr>
-                        ))}
+                        {rows.map((row, i) => {
+                          // Prüfe ob Kontaktdaten vorhanden
+                          const hasContact = kontaktRows.some(
+                            (k) =>
+                              k.name.toLowerCase().trim() === row.name.toLowerCase().trim() &&
+                              k.unit_label.toLowerCase().trim() === row.unit_label.toLowerCase().trim()
+                          );
+                          return (
+                            <tr
+                              key={i}
+                              className="border-b border-gray-50 hover:bg-gray-50"
+                            >
+                              <td className="px-3 py-2 text-gray-500">
+                                {row.number || "–"}
+                              </td>
+                              <td className="px-3 py-2 font-medium text-gray-900">
+                                {row.name}
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">
+                                {row.unit_label}
+                              </td>
+                              <td className="px-3 py-2 text-gray-600 text-right">
+                                {row.rent_cold
+                                  ? `${row.rent_cold.toFixed(2)} €`
+                                  : "–"}
+                              </td>
+                              <td className="px-3 py-2 font-medium text-gray-900 text-right">
+                                {row.rent_total.toFixed(2)} €
+                              </td>
+                              <td className="px-3 py-2 text-gray-500">
+                                {row.move_in_date || "–"}
+                              </td>
+                              <td className="px-3 py-2">
+                                {hasContact ? (
+                                  <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">✓</span>
+                                ) : (
+                                  <span className="text-[10px] text-gray-400">–</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -301,17 +442,30 @@ export default function ExcelImportModal({
               <h3 className="text-lg font-semibold text-gray-900 mb-2">
                 Import abgeschlossen!
               </h3>
-              <p className="text-sm text-gray-600">
-                <span className="text-emerald-600 font-medium">
-                  {importResult.success} Mieter erfolgreich importiert
-                </span>
-                {importResult.failed > 0 && (
-                  <span className="text-red-600 font-medium">
-                    {" "}
-                    · {importResult.failed} fehlgeschlagen
+              <div className="text-sm text-gray-600 space-y-1">
+                <p>
+                  <span className="text-emerald-600 font-medium">
+                    {importResult.success} Mieter erfolgreich importiert
                   </span>
+                  {importResult.failed > 0 && (
+                    <span className="text-red-600 font-medium">
+                      {" "}· {importResult.failed} fehlgeschlagen
+                    </span>
+                  )}
+                </p>
+                {(importResult.contacts > 0 || importResult.contactsFailed > 0) && (
+                  <p>
+                    <span className="text-emerald-600 font-medium">
+                      {importResult.contacts} Kontaktdaten zugeordnet
+                    </span>
+                    {importResult.contactsFailed > 0 && (
+                      <span className="text-amber-600 font-medium">
+                        {" "}· {importResult.contactsFailed} nicht zugeordnet
+                      </span>
+                    )}
+                  </p>
                 )}
-              </p>
+              </div>
             </div>
           )}
         </div>
@@ -333,6 +487,7 @@ export default function ExcelImportModal({
                 onClick={() => {
                   setStep("upload");
                   setRows([]);
+                  setKontaktRows([]);
                   setErrors([]);
                   if (fileInputRef.current) fileInputRef.current.value = "";
                 }}
